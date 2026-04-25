@@ -6489,6 +6489,9 @@ show_main_menu() {
     echo -e "${gl_kjlan}━━━━━━━━━ AI 代理服务 ━━━━━━━━━${gl_bai}"
     echo "32. AI代理工具箱 ▶ (Claude/WebUI/CRS/Fuclaude/Caddy/CF-Tunnel) ⭐ 推荐"
     echo ""
+    echo -e "${gl_kjlan}━━━━━━━━━ 安全加固 ━━━━━━━━━${gl_bai}"
+    echo "33. VPS 开机加固 ▶ (SSH端口/密钥登录/系统更新/工具/时区) ⭐ 推荐"
+    echo ""
     echo -e "${gl_kjlan}━━━━━━━━━ 一键优化 ━━━━━━━━━${gl_bai}"
     echo "66. ⭐ 一键全自动优化 (BBR v3 + 网络调优)"
     echo ""
@@ -6608,6 +6611,9 @@ show_main_menu() {
             ;;
         32)
             ai_proxy_menu
+            ;;
+        33)
+            vps_hardening_menu
             ;;
         66)
             one_click_optimize
@@ -10954,7 +10960,7 @@ run_fscarmen_singbox() {
     echo ""
 
     # 执行 F佬一键sing box脚本
-    if ! run_remote_script "https://raw.githubusercontent.com/fscarmen/sing-box/main/sing-box.sh" bash; then
+    if ! run_remote_script "https://raw.githubusercontent.com/CodeEagle/sing-box/main/sing-box.sh" bash; then
         echo -e "${gl_hong}❌ 脚本执行失败${gl_bai}"
         break_end
         return 1
@@ -10963,6 +10969,257 @@ run_fscarmen_singbox() {
     echo ""
     echo "------------------------------------------------"
     break_end
+}
+
+#=============================================================================
+# VPS 开机加固（参考 @legacyvps：买回来第一天该干什么）
+#=============================================================================
+
+vps_hardening_detect_pkg() {
+    if command -v apt >/dev/null 2>&1; then
+        echo apt
+    elif command -v dnf >/dev/null 2>&1; then
+        echo dnf
+    elif command -v yum >/dev/null 2>&1; then
+        echo yum
+    else
+        echo ""
+    fi
+}
+
+vps_hardening_ssh() {
+    clear
+    echo -e "${gl_kjlan}=== SSH 加固 ===${gl_bai}"
+    echo "  - 修改 SSH 端口"
+    echo "  - 启用密钥登录、禁用密码登录"
+    echo "  - PermitRootLogin prohibit-password"
+    echo ""
+    echo -e "${gl_huang}重要：改完后请先开新窗口、用新端口和密钥登一次，确认能进再关当前窗口。${gl_bai}"
+    echo -e "${gl_huang}否则万一密钥没配好，只能进商家后台用 VNC 救回来。${gl_bai}"
+    echo ""
+
+    # 当前端口检测
+    local current_port
+    current_port=$(awk '/^[[:space:]]*Port[[:space:]]+/{p=$2} END{print p+0}' /etc/ssh/sshd_config 2>/dev/null)
+    [ -z "$current_port" ] || [ "$current_port" = "0" ] && current_port=22
+    echo -e "当前 SSH 端口: ${gl_huang}${current_port}${gl_bai}"
+    echo ""
+
+    # 密钥检查
+    local key_count
+    key_count=$(grep -cE '^(ssh-rsa|ssh-ed25519|ecdsa-sha2-)' /root/.ssh/authorized_keys 2>/dev/null || echo 0)
+    if [ "$key_count" = "0" ]; then
+        echo -e "${gl_hong}⚠ /root/.ssh/authorized_keys 中未发现任何公钥。${gl_bai}"
+        echo -e "${gl_hong}  禁用密码登录前必须先添加公钥，否则会锁死自己。${gl_bai}"
+        read -e -p "现在添加公钥？(y/N): " add_key
+        if [[ "$add_key" =~ ^[Yy]$ ]]; then
+            mkdir -p /root/.ssh && chmod 700 /root/.ssh
+            echo "粘贴公钥（一行 ssh-ed25519/ssh-rsa AAAA... 结尾按回车，再 Ctrl+D）："
+            cat >> /root/.ssh/authorized_keys
+            chmod 600 /root/.ssh/authorized_keys
+            echo -e "${gl_lv}已追加。${gl_bai}"
+        else
+            echo "取消。先添加公钥再运行此项。"
+            break_end
+            return 1
+        fi
+    else
+        echo -e "${gl_lv}已检测到 ${key_count} 个公钥。${gl_bai}"
+    fi
+    echo ""
+
+    # 新端口
+    read -e -p "新 SSH 端口（默认保持 ${current_port}，回车跳过修改）: " new_port
+    new_port="${new_port:-$current_port}"
+    if ! [[ "$new_port" =~ ^[0-9]+$ ]] || [ "$new_port" -lt 1 ] || [ "$new_port" -gt 65535 ]; then
+        echo -e "${gl_hong}端口非法${gl_bai}"
+        break_end
+        return 1
+    fi
+
+    # 备份
+    cp -a /etc/ssh/sshd_config "/etc/ssh/sshd_config.bak.$(date +%s)"
+
+    # 修改配置
+    if [ "$new_port" != "$current_port" ]; then
+        if grep -qE '^[[:space:]]*Port[[:space:]]+' /etc/ssh/sshd_config; then
+            sed -i "s/^[[:space:]]*Port[[:space:]]\+.*/Port ${new_port}/" /etc/ssh/sshd_config
+        else
+            echo "Port ${new_port}" >> /etc/ssh/sshd_config
+        fi
+    fi
+
+    # 强化项：覆盖或追加
+    for kv in "PubkeyAuthentication yes" "PasswordAuthentication no" "PermitRootLogin prohibit-password" "ChallengeResponseAuthentication no" "UsePAM yes"; do
+        local key="${kv%% *}"
+        if grep -qE "^[[:space:]]*#?[[:space:]]*${key}[[:space:]]+" /etc/ssh/sshd_config; then
+            sed -i "s|^[[:space:]]*#\?[[:space:]]*${key}[[:space:]]\+.*|${kv}|" /etc/ssh/sshd_config
+        else
+            echo "${kv}" >> /etc/ssh/sshd_config
+        fi
+    done
+
+    # 校验配置
+    if ! sshd -t 2>/tmp/sshd_test.err; then
+        echo -e "${gl_hong}sshd 配置校验失败：${gl_bai}"
+        cat /tmp/sshd_test.err
+        echo "已留备份在 /etc/ssh/sshd_config.bak.*"
+        break_end
+        return 1
+    fi
+    echo -e "${gl_lv}sshd 配置校验通过。${gl_bai}"
+
+    # 防火墙：放新端口
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+        ufw allow "${new_port}/tcp" comment "SSH (hardened)" >/dev/null 2>&1 || true
+        echo "已添加 ufw 规则：${new_port}/tcp"
+        if [ "$new_port" != "$current_port" ] && [ "$current_port" != "22" ]; then
+            echo -e "${gl_huang}提示：旧端口 ${current_port} 的 ufw 规则未自动删除。新端口验证可用后手动 'ufw delete allow ${current_port}/tcp'。${gl_bai}"
+        fi
+    fi
+
+    # 重启
+    if systemctl list-units --type=service 2>/dev/null | grep -q '\bssh\.service\b'; then
+        systemctl restart ssh
+    else
+        systemctl restart sshd 2>/dev/null || service ssh restart 2>/dev/null || service sshd restart 2>/dev/null
+    fi
+    echo -e "${gl_lv}sshd 已重启。${gl_bai}"
+    echo ""
+    echo -e "${gl_huang}现在打开新终端窗口测试：ssh -p ${new_port} root@<your-vps-ip>${gl_bai}"
+    echo -e "${gl_huang}确认能登进去再关闭当前窗口。${gl_bai}"
+    break_end
+}
+
+vps_hardening_update_tools() {
+    clear
+    echo -e "${gl_kjlan}=== 系统更新 + 常用工具 ===${gl_bai}"
+    local pm
+    pm=$(vps_hardening_detect_pkg)
+    case "$pm" in
+        apt)
+            apt update && apt upgrade -y
+            apt install -y curl wget vim htop git unzip mtr-tiny iperf3 net-tools dnsutils ufw fail2ban
+            ;;
+        dnf|yum)
+            $pm makecache -y
+            $pm update -y
+            $pm install -y curl wget vim htop git unzip mtr iperf3 net-tools bind-utils firewalld fail2ban
+            ;;
+        *)
+            echo -e "${gl_hong}未识别的包管理器${gl_bai}"
+            break_end
+            return 1
+            ;;
+    esac
+    break_end
+}
+
+vps_hardening_timezone() {
+    clear
+    echo -e "${gl_kjlan}=== 时区设置 ===${gl_bai}"
+    echo "当前时区: $(timedatectl 2>/dev/null | awk -F': ' '/Time zone/{print $2}')"
+    read -e -p "设为 Asia/Shanghai？(Y/n): " ans
+    ans="${ans:-Y}"
+    if [[ "$ans" =~ ^[Yy]$ ]]; then
+        timedatectl set-timezone Asia/Shanghai
+        echo -e "${gl_lv}已设为 Asia/Shanghai。${gl_bai}"
+    else
+        read -e -p "输入时区（如 UTC / America/New_York）: " tz
+        [ -n "$tz" ] && timedatectl set-timezone "$tz"
+    fi
+    timedatectl 2>/dev/null | grep -E 'Time zone|Local time'
+    break_end
+}
+
+vps_hardening_docker() {
+    clear
+    echo -e "${gl_kjlan}=== 安装 Docker ===${gl_bai}"
+    if command -v docker >/dev/null 2>&1; then
+        echo -e "${gl_lv}已安装：$(docker --version)${gl_bai}"
+        break_end
+        return 0
+    fi
+    echo "脚本来源: https://get.docker.com"
+    read -e -p "继续？(Y/n): " ans
+    ans="${ans:-Y}"
+    [[ ! "$ans" =~ ^[Yy]$ ]] && { break_end; return 0; }
+    if curl -fsSL https://get.docker.com | sh; then
+        systemctl enable --now docker 2>/dev/null || true
+        docker --version && echo -e "${gl_lv}Docker 安装完成。${gl_bai}"
+    else
+        echo -e "${gl_hong}Docker 安装失败${gl_bai}"
+    fi
+    break_end
+}
+
+vps_hardening_netcheck() {
+    clear
+    echo -e "${gl_kjlan}=== 网络验证 ===${gl_bai}"
+    echo ""
+    echo "1) IP 全球连通性: 浏览器访问 https://itdog.cn/ping/<你的IP>"
+    echo ""
+    echo "2) 回程线路（晚高峰 20:00-23:00 测最有价值）："
+    read -e -p "   输入你的本地公网 IP 跑 mtr（回车跳过）: " local_ip
+    if [ -n "$local_ip" ]; then
+        if ! command -v mtr >/dev/null 2>&1; then
+            echo "未装 mtr，跳过。可于「系统更新」步骤一并安装。"
+        else
+            mtr -rn -c 10 "$local_ip" 2>&1 || true
+        fi
+    fi
+    echo ""
+    echo "3) 流媒体/AI 解锁检测（需要可访问 GitHub raw）："
+    read -e -p "   现在跑？(y/N): " run_media
+    if [[ "$run_media" =~ ^[Yy]$ ]]; then
+        bash <(curl -L -s media.ispvps.com) 2>&1 || true
+    fi
+    break_end
+}
+
+vps_hardening_all() {
+    clear
+    echo -e "${gl_kjlan}=== VPS 一键开机加固（全套）===${gl_bai}"
+    echo "依次执行：系统更新 → 时区 → SSH 加固 → 网络验证"
+    read -e -p "继续？(Y/n): " ans
+    ans="${ans:-Y}"
+    [[ ! "$ans" =~ ^[Yy]$ ]] && return 0
+    vps_hardening_update_tools
+    vps_hardening_timezone
+    vps_hardening_ssh
+    vps_hardening_netcheck
+}
+
+vps_hardening_menu() {
+    while true; do
+        clear
+        echo -e "${gl_zi}╔══════════════════════════════════════╗${gl_bai}"
+        echo -e "${gl_zi}║       VPS 开机加固（必做清单）       ║${gl_bai}"
+        echo -e "${gl_zi}╚══════════════════════════════════════╝${gl_bai}"
+        echo "参考: @legacyvps  https://x.com/legacyvps/status/2044945356954407355"
+        echo ""
+        echo "1. SSH 加固（改端口 / 禁密码 / 密钥登录）⭐"
+        echo "2. 系统更新 + 常用工具（curl/wget/vim/htop/mtr/ufw/fail2ban）"
+        echo "3. 时区设置（Asia/Shanghai）"
+        echo "4. 安装 Docker（get.docker.com）"
+        echo "5. 网络验证（itdog 提示 / mtr / 流媒体解锁）"
+        echo ""
+        echo "9. 一键全套（推荐顺序：2 → 3 → 1 → 5）"
+        echo ""
+        echo "0. 返回主菜单"
+        echo "------------------------------------------------"
+        read -e -p "请输入选择: " sub
+        case "$sub" in
+            1) vps_hardening_ssh ;;
+            2) vps_hardening_update_tools ;;
+            3) vps_hardening_timezone ;;
+            4) vps_hardening_docker ;;
+            5) vps_hardening_netcheck ;;
+            9) vps_hardening_all ;;
+            0) break ;;
+            *) echo "无效选择"; sleep 1 ;;
+        esac
+    done
 }
 
 #=============================================================================
