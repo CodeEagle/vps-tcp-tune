@@ -6,7 +6,8 @@
 
 > **CodeEagle fork 改动**：
 > - 菜单 28「F佬一键sing box脚本」改指向 [CodeEagle/sing-box](https://github.com/CodeEagle/sing-box)（含 IPv6 双栈 post-processor）
-> - 新增菜单 33「VPS 开机加固」：SSH 端口改、密钥登录、系统更新、工具安装、时区、网络验证
+> - 菜单 28 集成 IPv6 双栈选项：fscarmen 安装完毕后弹出 hostname/mirror/off/skip 选项一键启用 dual-stack post-processor
+> - 新增菜单 33「VPS 开机加固」：SSH 端口改、密钥登录、系统更新、工具安装、时区、Docker、fail2ban、网络验证
 >   参考：[@legacyvps - VPS 买回来第一天该干什么](https://x.com/legacyvps/status/2044945356954407355)
 >
 > **版本**: v5.0.0 🎉 **重大更新**：新增 Cloudflare Tunnel 管理模块（菜单 32-7）
@@ -172,7 +173,7 @@ chmod +x net-tcp-tune.sh
 
 | 编号 | 功能名称              | 说明                                                 |
 | :--: | --------------------- | ---------------------------------------------------- |
-|  33  | **VPS 开机加固** ⭐   | SSH 端口/密钥/系统更新/工具/时区/Docker/网络验证；参考 [@legacyvps](https://x.com/legacyvps/status/2044945356954407355) |
+|  33  | **VPS 开机加固** ⭐   | SSH 端口/密钥/系统更新/工具/时区/Docker/**fail2ban**/网络验证；参考 [@legacyvps](https://x.com/legacyvps/status/2044945356954407355) |
 
 ### 一键优化
 

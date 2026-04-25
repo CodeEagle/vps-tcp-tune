@@ -10953,7 +10953,7 @@ run_kejilion_script() {
 
 run_fscarmen_singbox() {
     clear
-    echo -e "${gl_kjlan}=== F佬一键sing box脚本 ===${gl_bai}"
+    echo -e "${gl_kjlan}=== F佬一键sing box脚本（CodeEagle fork：含 IPv6 双栈 post-processor）===${gl_bai}"
     echo ""
     echo "正在运行 F佬一键sing box脚本..."
     echo "------------------------------------------------"
@@ -10968,6 +10968,47 @@ run_fscarmen_singbox() {
 
     echo ""
     echo "------------------------------------------------"
+
+    # 仅当 fscarmen 已完成安装（subscribe 目录存在）时才提示 dual-stack
+    if [ -d /etc/sing-box/subscribe ]; then
+        echo ""
+        echo -e "${gl_kjlan}━━━━━━ IPv6 双栈 post-processor ━━━━━━${gl_bai}"
+        echo "  hostname  - 用域名替换订阅中的 IP（每协议 1 条目，OS Happy Eyeballs 自动选 v4/v6）⭐ 推荐"
+        echo "  mirror    - 每协议追加 IPv6 镜像条目（无域名时用）"
+        echo "  off       - 禁用并恢复原始 sb.sh"
+        echo "  skip      - 不动（保留当前状态）"
+        echo ""
+        read -e -p "选择 [hostname/mirror/off/skip] (默认 skip): " ds_mode
+        ds_mode="${ds_mode:-skip}"
+        case "$ds_mode" in
+            hostname)
+                read -e -p "输入双栈域名（A + AAAA 已配置，CF 必须灰云 DNS only）: " ds_host
+                if [ -z "$ds_host" ]; then
+                    echo -e "${gl_hong}域名为空，取消${gl_bai}"
+                else
+                    if ! bash <(curl -fsSL "https://raw.githubusercontent.com/CodeEagle/sing-box/main/extras/install-dualstack.sh") hostname "$ds_host"; then
+                        echo -e "${gl_hong}❌ install-dualstack hostname 模式失败${gl_bai}"
+                    else
+                        echo -e "${gl_lv}已启用 hostname 模式：$ds_host${gl_bai}"
+                        echo "运行 'sb -n' 验证。"
+                    fi
+                fi
+                ;;
+            mirror)
+                if ! bash <(curl -fsSL "https://raw.githubusercontent.com/CodeEagle/sing-box/main/extras/install-dualstack.sh") mirror; then
+                    echo -e "${gl_hong}❌ install-dualstack mirror 模式失败${gl_bai}"
+                else
+                    echo -e "${gl_lv}已启用 dual-stack mirror 模式。${gl_bai}"
+                    echo "运行 'sb -n' 验证。"
+                fi
+                ;;
+            off)
+                bash <(curl -fsSL "https://raw.githubusercontent.com/CodeEagle/sing-box/main/extras/install-dualstack.sh") off || true
+                ;;
+            skip|*)
+                ;;
+        esac
+    fi
     break_end
 }
 
@@ -11153,6 +11194,74 @@ vps_hardening_docker() {
     break_end
 }
 
+vps_hardening_fail2ban() {
+    clear
+    echo -e "${gl_kjlan}=== fail2ban 防暴破 ===${gl_bai}"
+    echo "  - 监控 sshd 失败登录"
+    echo "  - 同 IP 在 findtime 内失败超 maxretry 次则封 bantime"
+    echo ""
+
+    # 检测/安装
+    if ! command -v fail2ban-client >/dev/null 2>&1; then
+        local pm
+        pm=$(vps_hardening_detect_pkg)
+        case "$pm" in
+            apt)         apt update && apt install -y fail2ban ;;
+            dnf|yum)     $pm install -y epel-release 2>/dev/null; $pm install -y fail2ban ;;
+            *)           echo -e "${gl_hong}未识别的包管理器${gl_bai}"; break_end; return 1 ;;
+        esac
+    fi
+
+    # 自动检测当前 SSH 端口
+    local ssh_port
+    ssh_port=$(awk '/^[[:space:]]*Port[[:space:]]+/{p=$2} END{print p+0}' /etc/ssh/sshd_config 2>/dev/null)
+    [ -z "$ssh_port" ] || [ "$ssh_port" = "0" ] && ssh_port=22
+    echo -e "检测到 SSH 端口: ${gl_huang}${ssh_port}${gl_bai}"
+    echo ""
+
+    # 默认参数
+    local bantime="1h" findtime="10m" maxretry=5
+    read -e -p "bantime（默认 ${bantime}，例：1h / 24h / -1 永封）: " in_bantime
+    bantime="${in_bantime:-$bantime}"
+    read -e -p "findtime（默认 ${findtime}）: " in_findtime
+    findtime="${in_findtime:-$findtime}"
+    read -e -p "maxretry（默认 ${maxretry}）: " in_maxretry
+    maxretry="${in_maxretry:-$maxretry}"
+
+    # 写入 jail.local（覆盖式，幂等）
+    mkdir -p /etc/fail2ban
+    cat > /etc/fail2ban/jail.local <<EOF
+[DEFAULT]
+bantime  = ${bantime}
+findtime = ${findtime}
+maxretry = ${maxretry}
+backend  = systemd
+banaction = iptables-multiport
+ignoreip = 127.0.0.1/8 ::1
+
+[sshd]
+enabled  = true
+port     = ${ssh_port}
+filter   = sshd
+logpath  = %(sshd_log)s
+EOF
+
+    systemctl enable --now fail2ban 2>/dev/null
+    if ! systemctl restart fail2ban; then
+        echo -e "${gl_hong}fail2ban 重启失败${gl_bai}"
+        break_end
+        return 1
+    fi
+    sleep 1
+    echo ""
+    echo -e "${gl_lv}fail2ban 已启用。状态：${gl_bai}"
+    fail2ban-client status sshd 2>&1 | head -20
+    echo ""
+    echo "查看封禁列表: fail2ban-client status sshd"
+    echo "解封 IP:     fail2ban-client set sshd unbanip <IP>"
+    break_end
+}
+
 vps_hardening_netcheck() {
     clear
     echo -e "${gl_kjlan}=== 网络验证 ===${gl_bai}"
@@ -11180,13 +11289,14 @@ vps_hardening_netcheck() {
 vps_hardening_all() {
     clear
     echo -e "${gl_kjlan}=== VPS 一键开机加固（全套）===${gl_bai}"
-    echo "依次执行：系统更新 → 时区 → SSH 加固 → 网络验证"
+    echo "依次执行：系统更新 → 时区 → SSH 加固 → fail2ban → 网络验证"
     read -e -p "继续？(Y/n): " ans
     ans="${ans:-Y}"
     [[ ! "$ans" =~ ^[Yy]$ ]] && return 0
     vps_hardening_update_tools
     vps_hardening_timezone
     vps_hardening_ssh
+    vps_hardening_fail2ban
     vps_hardening_netcheck
 }
 
@@ -11203,8 +11313,9 @@ vps_hardening_menu() {
         echo "3. 时区设置（Asia/Shanghai）"
         echo "4. 安装 Docker（get.docker.com）"
         echo "5. 网络验证（itdog 提示 / mtr / 流媒体解锁）"
+        echo "6. fail2ban 防暴破（自动检测 SSH 端口） ⭐"
         echo ""
-        echo "9. 一键全套（推荐顺序：2 → 3 → 1 → 5）"
+        echo "9. 一键全套（推荐顺序：2 → 3 → 1 → 6 → 5）"
         echo ""
         echo "0. 返回主菜单"
         echo "------------------------------------------------"
@@ -11215,6 +11326,7 @@ vps_hardening_menu() {
             3) vps_hardening_timezone ;;
             4) vps_hardening_docker ;;
             5) vps_hardening_netcheck ;;
+            6) vps_hardening_fail2ban ;;
             9) vps_hardening_all ;;
             0) break ;;
             *) echo "无效选择"; sleep 1 ;;
